@@ -98,7 +98,7 @@ function OverviewTab({ agent, onUpdate }: { agent: Agent; onUpdate: (a: Agent) =
     if (!confirm(`${status === 'APPROVED' ? 'Approve' : 'Reject'} KYC for ${agent.fullName}?`)) return;
     setKycLoading(true);
     try {
-      await patch(`/admin/agents/${agent.id}/kyc`, { status });
+      await patch(`/agents/${agent.id}/kyc`, { status });
       onUpdate({ ...agent, kycStatus: status });
       alert(`KYC ${status.toLowerCase()} successfully.`);
     } catch {
@@ -249,7 +249,7 @@ function KycTab({ agent, onUpdate }: { agent: Agent; onUpdate: (a: Agent) => voi
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ items: typeof docs }>(`/admin/agents/${agent.id}/kyc-docs`);
+        const d = await get<{ items: typeof docs }>(`/agents/${agent.id}/kyc-docs`);
         setDocs(d.items);
       } catch {
         // No mock fallback — leave empty, API not yet available
@@ -262,7 +262,7 @@ function KycTab({ agent, onUpdate }: { agent: Agent; onUpdate: (a: Agent) => voi
     if (!confirm(`${decision === 'APPROVED' ? 'Approve' : 'Reject'} KYC for ${agent.fullName}?`)) return;
     setSubmitting(true);
     try {
-      await patch(`/admin/agents/${agent.id}/kyc`, { status: decision, note });
+      await patch(`/agents/${agent.id}/kyc`, { status: decision, note });
       onUpdate({ ...agent, kycStatus: decision });
       setNote('');
       setDecision('');

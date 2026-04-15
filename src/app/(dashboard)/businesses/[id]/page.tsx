@@ -128,7 +128,7 @@ function OverviewTab({ biz, onUpdate }: { biz: Business; onUpdate: (b: Business)
     if (!confirm(`${newStatus === 'SUSPENDED' ? 'Suspend' : 'Approve'} ${biz.name}?`)) return;
     setActionLoading(true);
     try {
-      await patch(`/admin/businesses/${biz.id}`, { status: newStatus });
+      await patch(`/businesses/${biz.id}`, { status: newStatus });
       onUpdate({ ...biz, status: newStatus });
       alert(`Business ${newStatus.toLowerCase()} successfully.`);
     } catch {
@@ -142,7 +142,7 @@ function OverviewTab({ biz, onUpdate }: { biz: Business; onUpdate: (b: Business)
     if (!confirm(`Change plan to ${plan} for ${biz.name}?`)) return;
     setActionLoading(true);
     try {
-      await patch(`/admin/businesses/${biz.id}`, { plan });
+      await patch(`/businesses/${biz.id}`, { plan });
       alert(`Plan changed to ${plan}.`);
     } catch {
       alert('Action failed — check console.');

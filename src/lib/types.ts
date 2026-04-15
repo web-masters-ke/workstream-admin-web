@@ -41,8 +41,8 @@ export interface Business {
   updatedAt: ISODate;
 }
 
-export type AgentStatus = 'PENDING_KYC' | 'ACTIVE' | 'SUSPENDED' | 'OFFLINE' | 'ONLINE';
-export type KycStatus = 'NOT_STARTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+export type AgentStatus = 'PENDING_VERIFICATION' | 'VERIFIED' | 'ACTIVE' | 'SUSPENDED' | 'OFFLINE' | 'ONLINE';
+export type KycStatus = 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export interface Agent {
   id: UUID;
@@ -54,6 +54,7 @@ export interface Agent {
   skills?: string[];
   rating?: number;
   tasksCompleted?: number;
+  completedTasks?: number;
   status: AgentStatus;
   kycStatus: KycStatus;
   onlineNow?: boolean;

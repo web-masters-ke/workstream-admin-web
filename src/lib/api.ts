@@ -94,6 +94,11 @@ export async function patch<T>(url: string, body?: unknown, config?: AxiosReques
   return unwrap<T>(r);
 }
 
+export async function put<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  const r = await api.put<ApiEnvelope<T>>(url, body, config);
+  return unwrap<T>(r);
+}
+
 export async function del<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
   const r = await api.delete<ApiEnvelope<T>>(url, config);
   return unwrap<T>(r);
@@ -101,8 +106,13 @@ export async function del<T>(url: string, config?: AxiosRequestConfig): Promise<
 
 export function errorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
-    const data = err.response?.data as { message?: string; error?: string } | undefined;
-    return data?.message || data?.error || err.message;
+    const data = err.response?.data as any;
+    // Backend envelope: { success, error: { code, message, details } }
+    if (data?.error?.message && typeof data.error.message === 'string') return data.error.message;
+    // NestJS default / validation: { message: string | string[] }
+    if (Array.isArray(data?.message)) return data.message[0];
+    if (data?.message && typeof data.message === 'string') return data.message;
+    return err.message;
   }
   if (err instanceof Error) return err.message;
   return 'Unknown error';

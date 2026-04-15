@@ -64,11 +64,31 @@ export default function SlaPage() {
     setError(null);
     Promise.all([
       get<OverviewData>('/analytics/overview').catch(() => ({})),
-      get<SlaTask[] | { items: SlaTask[] }>('/tasks/sla').catch(() => [] as SlaTask[]),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      get<any[]>('/tasks/sla/breaches').catch(() => [] as any[]),
     ]).then(([ov, raw]) => {
       setOverview(ov as OverviewData);
-      const items: SlaTask[] = Array.isArray(raw) ? raw : ((raw as { items: SlaTask[] }).items ?? []);
-      // If backend returns empty, build mock-ish derived view from overview
+      const items: SlaTask[] = (Array.isArray(raw) ? raw : []).map((t: any) => {
+        const agent = t.assignments?.[0]?.agent;
+        const agentName = agent?.user?.name ?? agent?.user?.email ?? undefined;
+        const minutesOverdue: number = t.minutesOverdue ?? 0;
+        // slaPercent: cap at 200% for very late tasks; breached = >100%
+        const slaPercent = Math.min(100 + Math.round(minutesOverdue / 60), 200);
+        const hoursOverdue = Math.round(minutesOverdue / 60);
+        const timeElapsed = minutesOverdue < 60
+          ? `${minutesOverdue}m overdue`
+          : `${hoursOverdue}h overdue`;
+        return {
+          id: t.id,
+          title: t.title,
+          businessName: t.businessName ?? undefined,
+          agentName,
+          slaPercent,
+          timeElapsed,
+          status: 'BREACHED' as const,
+          dueAt: t.dueAt ?? undefined,
+        };
+      });
       setTasks(items);
     }).catch((e: Error) => {
       setError(e?.message ?? 'Failed to load SLA data');

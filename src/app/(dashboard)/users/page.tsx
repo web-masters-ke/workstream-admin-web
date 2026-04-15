@@ -33,6 +33,39 @@ export default function UsersPage() {
   const [detailTab, setDetailTab] = useState<'profile' | 'activity' | 'sessions'>('profile');
   const [newRole, setNewRole] = useState<UserRole | ''>('');
 
+  // Create user — role-aware invite form
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [cRole, setCRole] = useState<UserRole>('BUSINESS');
+  // Personal
+  const [cFirst, setCFirst] = useState('');
+  const [cLast, setCLast] = useState('');
+  const [cEmail, setCEmail] = useState('');
+  const [cPhone, setCPhone] = useState('');
+  // Business-specific
+  const [cBizName, setCBizName] = useState('');
+  const [cBizLegal, setCBizLegal] = useState('');
+  const [cBizIndustry, setCBizIndustry] = useState('');
+  const [cBizCountry, setCBizCountry] = useState('');
+  const [cBizPhone, setCBizPhone] = useState('');
+  const [cBizWebsite, setCBizWebsite] = useState('');
+  const [cBizAddress, setCBizAddress] = useState('');
+  const [cBizDesc, setCBizDesc] = useState('');
+  const [cBizRegNum, setCBizRegNum] = useState('');
+  const [cBizTaxId, setCBizTaxId] = useState('');
+  // Agent-specific
+  const [cAgentCountry, setCAgentCountry] = useState('');
+  const [cAgentCity, setCAgentCity] = useState('');
+  const [cAgentBio, setCAgentBio] = useState('');
+  const [cAgentSkills, setCAgentSkills] = useState('');
+  // Org linking (SUPERVISOR/ADMIN required, AGENT optional)
+  const [cOrgId, setCOrgId] = useState('');
+  const [cOrgSearch, setCOrgSearch] = useState('');
+  const [businesses, setBusinesses] = useState<{ id: string; name: string; contactEmail: string }[]>([]);
+  const [bizLoading, setBizLoading] = useState(false);
+  const [bizError, setBizError] = useState<string | null>(null);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -124,6 +157,78 @@ export default function UsersPage() {
     }
   }
 
+  // Load businesses when create drawer opens
+  useEffect(() => {
+    if (!showCreate) return;
+    setBizLoading(true);
+    setBizError(null);
+    get<{ id: string; name: string; contactEmail: string }[]>('/admin/businesses?limit=200')
+      .then((d) => {
+        const items = Array.isArray(d) ? d : (d as any).items ?? [];
+        setBusinesses(items);
+      })
+      .catch((e: any) => {
+        setBizError(e?.message ?? 'Failed to load organisations');
+      })
+      .finally(() => setBizLoading(false));
+  }, [showCreate]);
+
+  function resetCreateForm() {
+    setCFirst(''); setCLast(''); setCEmail(''); setCPhone(''); setCRole('BUSINESS');
+    setCBizName(''); setCBizLegal(''); setCBizIndustry(''); setCBizCountry(''); setCBizPhone('');
+    setCBizWebsite(''); setCBizAddress(''); setCBizDesc(''); setCBizRegNum(''); setCBizTaxId('');
+    setCAgentCountry(''); setCAgentCity(''); setCAgentBio(''); setCAgentSkills('');
+    setCOrgId(''); setCOrgSearch(''); setBizError(null);
+    setCreateError(null);
+  }
+
+  async function createUser() {
+    if (!cEmail.trim()) { setCreateError('Email is required'); return; }
+    if (cRole === 'BUSINESS' && !cBizName.trim()) { setCreateError('Business name is required'); return; }
+    if ((cRole === 'SUPERVISOR' || cRole === 'ADMIN') && !cOrgId) {
+      setCreateError('Organisation is required for Supervisor and Admin accounts');
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        firstName: cFirst.trim() || undefined,
+        lastName: cLast.trim() || undefined,
+        email: cEmail.trim(),
+        phone: cPhone.trim() || undefined,
+        role: cRole,
+      };
+      if (cRole === 'BUSINESS') {
+        payload.businessName = cBizName.trim() || undefined;
+        payload.businessLegalName = cBizLegal.trim() || undefined;
+        payload.businessIndustry = cBizIndustry.trim() || undefined;
+        payload.businessCountry = cBizCountry.trim() || undefined;
+        payload.businessPhone = cBizPhone.trim() || undefined;
+        payload.businessWebsite = cBizWebsite.trim() || undefined;
+        payload.businessAddress = cBizAddress.trim() || undefined;
+        payload.businessDescription = cBizDesc.trim() || undefined;
+        payload.businessRegistrationNumber = cBizRegNum.trim() || undefined;
+        payload.businessTaxId = cBizTaxId.trim() || undefined;
+      }
+      if (cRole === 'AGENT') {
+        payload.country = cAgentCountry.trim() || undefined;
+        payload.city = cAgentCity.trim() || undefined;
+        payload.bio = cAgentBio.trim() || undefined;
+        payload.skills = cAgentSkills.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+      if (cOrgId) payload.businessId = cOrgId;
+      const u = await post<User>('/admin/users', payload);
+      setRows((prev) => [{ ...u, phone: cPhone.trim() || null } as User, ...prev]);
+      setShowCreate(false);
+      resetCreateForm();
+    } catch (e: unknown) {
+      setCreateError((e as { message?: string })?.message ?? 'Failed to create user');
+    } finally {
+      setCreating(false);
+    }
+  }
+
   function startImpersonate(user: User) {
     impersonate.set({
       id: user.id,
@@ -186,9 +291,10 @@ export default function UsersPage() {
         title="Users"
         description="All platform accounts across roles. Suspend, reactivate, or impersonate from here."
         actions={
-          <Button variant="secondary" onClick={exportCurrent}>
-            Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => setShowCreate(true)}>+ Invite User</Button>
+            <Button variant="secondary" onClick={exportCurrent}>Export CSV</Button>
+          </div>
         }
       />
 
@@ -245,6 +351,240 @@ export default function UsersPage() {
         selectedIds={selectedIds}
         onSelectedChange={setSelectedIds}
       />
+
+      {/* Create user drawer — comprehensive role-aware form */}
+      <Drawer
+        open={showCreate}
+        onClose={() => { setShowCreate(false); resetCreateForm(); }}
+        title="Add Account"
+        width="w-[560px]"
+        footer={
+          <div className="flex gap-2">
+            <Button onClick={createUser} disabled={creating}>{creating ? 'Creating…' : `Create ${cRole === 'BUSINESS' ? 'business account' : cRole === 'AGENT' ? 'agent account' : 'account'}`}</Button>
+            <Button variant="ghost" onClick={() => { setShowCreate(false); resetCreateForm(); }}>Cancel</Button>
+          </div>
+        }
+      >
+        <div className="space-y-5 text-sm">
+          {createError && <div className="rounded-md bg-danger/10 px-3 py-2 text-xs text-danger">{createError}</div>}
+
+          {/* Role type selector — big cards */}
+          <div>
+            <div className="mb-2 text-[11px] uppercase tracking-wider text-muted">Account type *</div>
+            <div className="grid grid-cols-2 gap-2">
+              {(['BUSINESS', 'AGENT', 'SUPERVISOR', 'ADMIN'] as UserRole[]).map((r) => {
+                const meta: Record<string, { icon: string; label: string; desc: string }> = {
+                  BUSINESS: { icon: '🏢', label: 'Business / Org', desc: 'Company account that posts jobs and manages workforce.' },
+                  AGENT: { icon: '👤', label: 'Agent', desc: 'Field agent who picks up and completes tasks.' },
+                  SUPERVISOR: { icon: '🧑‍💼', label: 'Supervisor', desc: 'Internal ops staff with elevated task access.' },
+                  ADMIN: { icon: '🔐', label: 'Admin', desc: 'Platform administrator with full access.' },
+                };
+                const m = meta[r];
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setCRole(r)}
+                    className={`rounded-lg border p-3 text-left transition-all ${cRole === r ? 'border-brand bg-brand/8 ring-1 ring-brand/40' : 'border-border bg-surface-2 hover:border-brand/30'}`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-lg">{m.icon}</span>
+                      <span className="font-semibold text-fg text-xs">{m.label}</span>
+                    </div>
+                    <p className="text-[10px] text-muted leading-snug">{m.desc}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Account owner (always shown) ── */}
+          <div className="rounded-lg border border-border bg-surface-2 p-4 space-y-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted font-semibold">Account owner</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">First name</label>
+                <Input value={cFirst} onChange={(e) => setCFirst(e.target.value)} placeholder="John" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Last name</label>
+                <Input value={cLast} onChange={(e) => setCLast(e.target.value)} placeholder="Doe" />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] text-muted">Email address *</label>
+              <Input type="email" value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="john@company.com" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] text-muted">Phone number</label>
+              <Input value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="+254 700 000 000" />
+            </div>
+            <p className="text-[10px] text-muted/70 pt-1">A password reset link will be sent to their email to activate the account.</p>
+          </div>
+
+          {/* ── Business details (only for BUSINESS role) ── */}
+          {cRole === 'BUSINESS' && (
+            <div className="rounded-lg border border-brand/30 bg-brand/5 p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-base">🏢</span>
+                <div className="text-[11px] uppercase tracking-wider text-brand font-semibold">Business / Organisation details</div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Business name *</label>
+                <Input value={cBizName} onChange={(e) => setCBizName(e.target.value)} placeholder="Acme Corp Ltd" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Legal / registered name</label>
+                  <Input value={cBizLegal} onChange={(e) => setCBizLegal(e.target.value)} placeholder="Acme Corporation Limited" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Industry / sector</label>
+                  <Input value={cBizIndustry} onChange={(e) => setCBizIndustry(e.target.value)} placeholder="Logistics, Fintech, Retail…" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Country of registration</label>
+                  <Input value={cBizCountry} onChange={(e) => setCBizCountry(e.target.value)} placeholder="Kenya" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Business phone</label>
+                  <Input value={cBizPhone} onChange={(e) => setCBizPhone(e.target.value)} placeholder="+254 720 000 000" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Registration number</label>
+                  <Input value={cBizRegNum} onChange={(e) => setCBizRegNum(e.target.value)} placeholder="CPR/2024/123456" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Tax / KRA PIN</label>
+                  <Input value={cBizTaxId} onChange={(e) => setCBizTaxId(e.target.value)} placeholder="P000000000A" />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Website</label>
+                <Input value={cBizWebsite} onChange={(e) => setCBizWebsite(e.target.value)} placeholder="https://acmecorp.co.ke" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Physical address</label>
+                <Input value={cBizAddress} onChange={(e) => setCBizAddress(e.target.value)} placeholder="2nd Floor, Westlands, Nairobi" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Description / what you do</label>
+                <textarea
+                  value={cBizDesc}
+                  onChange={(e) => setCBizDesc(e.target.value)}
+                  placeholder="Brief description of the business and the kinds of tasks they'll post…"
+                  rows={3}
+                  className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 resize-none"
+                />
+              </div>
+              <p className="text-[10px] text-muted/70">Business account starts as <span className="font-semibold text-warn">Pending Verification</span> — admin must approve before they can post tasks.</p>
+            </div>
+          )}
+
+          {/* ── Agent details (only for AGENT role) ── */}
+          {cRole === 'AGENT' && (
+            <div className="rounded-lg border border-success/30 bg-success/5 p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-base">👤</span>
+                <div className="text-[11px] uppercase tracking-wider text-success font-semibold">Agent profile</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">Country</label>
+                  <Input value={cAgentCountry} onChange={(e) => setCAgentCountry(e.target.value)} placeholder="Kenya" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-muted">City</label>
+                  <Input value={cAgentCity} onChange={(e) => setCAgentCity(e.target.value)} placeholder="Nairobi" />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Skills <span className="text-muted/60">(comma-separated)</span></label>
+                <Input value={cAgentSkills} onChange={(e) => setCAgentSkills(e.target.value)} placeholder="data entry, delivery, customer support" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">Bio / background</label>
+                <textarea
+                  value={cAgentBio}
+                  onChange={(e) => setCAgentBio(e.target.value)}
+                  placeholder="Brief background and experience…"
+                  rows={3}
+                  className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 resize-none"
+                />
+              </div>
+              <p className="text-[10px] text-muted/70">Agent starts as <span className="font-semibold text-warn">Pending KYC</span> — must submit documents before accepting tasks.</p>
+            </div>
+          )}
+
+          {/* ── Organisation linking ── */}
+          {(cRole === 'SUPERVISOR' || cRole === 'ADMIN' || cRole === 'AGENT') && (
+            <div className={`rounded-lg border p-4 space-y-3 ${(cRole === 'SUPERVISOR' || cRole === 'ADMIN') ? 'border-warn/40 bg-warn/5' : 'border-border bg-surface-2'}`}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🏢</span>
+                  <div className={`text-[11px] uppercase tracking-wider font-semibold ${(cRole === 'SUPERVISOR' || cRole === 'ADMIN') ? 'text-warn' : 'text-muted'}`}>
+                    Organisation {(cRole === 'SUPERVISOR' || cRole === 'ADMIN') ? '(required)' : '(optional)'}
+                  </div>
+                </div>
+                {cRole === 'AGENT' && cOrgId && (
+                  <button type="button" onClick={() => { setCOrgId(''); setCOrgSearch(''); }} className="text-[10px] text-muted underline">
+                    Clear (free agent)
+                  </button>
+                )}
+              </div>
+              {(cRole === 'SUPERVISOR' || cRole === 'ADMIN') && (
+                <p className="text-[10px] text-warn/80">Supervisors and Admins must be linked to an organisation.</p>
+              )}
+              {cOrgId ? (
+                <div className="flex items-center justify-between rounded-md border border-brand/30 bg-brand/5 px-3 py-2">
+                  <div>
+                    <div className="text-xs font-medium text-fg">{businesses.find((b) => b.id === cOrgId)?.name ?? cOrgId}</div>
+                    <div className="text-[10px] text-muted">{businesses.find((b) => b.id === cOrgId)?.contactEmail ?? ''}</div>
+                  </div>
+                  <button type="button" onClick={() => { setCOrgId(''); setCOrgSearch(''); }} className="text-xs text-danger hover:underline">Change</button>
+                </div>
+              ) : (
+                <>
+                  <Input
+                    placeholder="Search organisation…"
+                    value={cOrgSearch}
+                    onChange={(e) => setCOrgSearch(e.target.value)}
+                  />
+                  {bizLoading ? (
+                    <div className="text-xs text-muted py-2">Loading organisations…</div>
+                  ) : bizError ? (
+                    <div className="text-xs text-danger py-2">{bizError}</div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                      {businesses
+                        .filter((b) => !cOrgSearch || b.name.toLowerCase().includes(cOrgSearch.toLowerCase()) || b.contactEmail.toLowerCase().includes(cOrgSearch.toLowerCase()))
+                        .slice(0, 20)
+                        .map((b) => (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => { setCOrgId(b.id); setCOrgSearch(''); }}
+                            className="w-full text-left px-3 py-2 hover:bg-surface-2 transition-colors"
+                          >
+                            <div className="text-xs font-medium text-fg">{b.name}</div>
+                            <div className="text-[10px] text-muted">{b.contactEmail}</div>
+                          </button>
+                        ))}
+                      {businesses.filter((b) => !cOrgSearch || b.name.toLowerCase().includes(cOrgSearch.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-xs text-muted">No organisations found</div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </Drawer>
 
       <Drawer
         open={!!selected}

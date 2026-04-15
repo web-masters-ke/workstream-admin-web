@@ -27,12 +27,39 @@ export default function AgentsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState<Tab>('overview');
 
+  // Create agent
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [cFirst, setCFirst] = useState('');
+  const [cLast, setCLast] = useState('');
+  const [cEmail, setCEmail] = useState('');
+  const [cPhone, setCPhone] = useState('');
+  const [cCountry, setCCountry] = useState('');
+  const [cSkills, setCSkills] = useState('');
+  const [cRate, setCRate] = useState('');
+  const [cContractType, setCContractType] = useState<'EMPLOYEE' | 'FREELANCER'>('FREELANCER');
+  const [cMessage, setCMessage] = useState('');
+  // Org linking
+  const [cOrgId, setCOrgId] = useState('');
+  const [cOrgSearch, setCOrgSearch] = useState('');
+  const [cOrgFree, setCOrgFree] = useState(true); // true = free agent
+  const [businesses, setBusinesses] = useState<{ id: string; name: string; contactEmail: string }[]>([]);
+  const [bizLoading, setBizLoading] = useState(false);
+
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-        const data = await get<Agent[] | { items: Agent[] }>('/agents');
-        setRows(Array.isArray(data) ? data : data.items);
+        const data = await get<Agent[] | { items: Agent[]; total?: number }>('/agents?limit=100');
+        const items = Array.isArray(data) ? data : data.items ?? [];
+        setRows(items.map((a: any) => ({
+          ...a,
+          fullName: a.fullName || a.user?.name || [a.user?.firstName, a.user?.lastName].filter(Boolean).join(' ') || a.email || '—',
+          email: a.email || a.user?.email || '',
+          // skills come back as AgentSkill objects { id, agentId, skill } — flatten to strings
+          skills: (a.skills ?? []).map((s: any) => (typeof s === 'string' ? s : s.skill)).filter(Boolean),
+        })));
       } catch (e: any) {
         setError(e?.message ?? 'Failed to load agents');
       } finally {
@@ -40,6 +67,16 @@ export default function AgentsPage() {
       }
     })();
   }, []);
+
+  // Load businesses when create drawer opens
+  useEffect(() => {
+    if (!showCreate) return;
+    setBizLoading(true);
+    get<{ id: string; name: string; contactEmail: string }[]>('/admin/businesses?limit=200')
+      .then((d) => setBusinesses(Array.isArray(d) ? d : (d as any).items ?? []))
+      .catch(() => {})
+      .finally(() => setBizLoading(false));
+  }, [showCreate]);
 
   const countries = useMemo(() => Array.from(new Set(rows.map((a) => a.country).filter(Boolean))).sort() as string[], [rows]);
   const filtered = useMemo(
@@ -50,7 +87,7 @@ export default function AgentsPage() {
         if (country && a.country !== country) return false;
         if (q) {
           const s = q.toLowerCase();
-          return a.fullName.toLowerCase().includes(s) || a.email.toLowerCase().includes(s) || a.id.toLowerCase().includes(s);
+          return (a.fullName ?? '').toLowerCase().includes(s) || (a.email ?? '').toLowerCase().includes(s) || a.id.toLowerCase().includes(s);
         }
         return true;
       }),
@@ -65,8 +102,8 @@ export default function AgentsPage() {
         <div className="flex items-center gap-2">
           <span className={`inline-block h-2 w-2 rounded-full ${a.onlineNow ? 'bg-success' : 'bg-muted/50'}`} aria-hidden />
           <div>
-            <div className="font-medium text-fg">{a.fullName}</div>
-            <div className="text-xs text-muted">{a.email}</div>
+            <div className="font-medium text-fg">{a.fullName || a.email || '—'}</div>
+            <div className="text-xs text-muted">{a.fullName ? a.email : ''}</div>
           </div>
         </div>
       ),
@@ -75,19 +112,91 @@ export default function AgentsPage() {
     { key: 'status', header: 'Status', render: (a) => <Badge tone={statusTone(a.status)}>{a.status}</Badge> },
     { key: 'kyc', header: 'KYC', render: (a) => <Badge tone={statusTone(a.kycStatus)}>{a.kycStatus}</Badge> },
     { key: 'rating', header: 'Rating', render: (a) => <span className="text-fg">{toFixed(a.rating, 1)}</span> },
-    { key: 'tasks', header: 'Tasks', render: (a) => <span className="text-fg">{a.tasksCompleted}</span> },
+    { key: 'tasks', header: 'Tasks', render: (a) => <span className="text-fg">{(a as any).completedTasks ?? a.tasksCompleted ?? 0}</span> },
     { key: 'last', header: 'Last seen', render: (a) => <span className="text-muted">{formatDate(a.lastSeenAt)}</span> },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (a) => (
+        <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
+          {a.kycStatus !== 'APPROVED' && (
+            <>
+              <button
+                onClick={() => review(a, 'APPROVED')}
+                className="rounded-md bg-success/10 px-2 py-1 text-[11px] font-medium text-success hover:bg-success/20 transition-colors"
+              >
+                Approve KYC
+              </button>
+              <button
+                onClick={() => review(a, 'REJECTED')}
+                className="rounded-md bg-danger/10 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/20 transition-colors"
+              >
+                Reject
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => {
+              const clean = { ...a, skills: ((a.skills ?? []) as any[]).map((s) => typeof s === 'string' ? s : s?.skill).filter(Boolean) };
+              setSelected(clean as Agent);
+              setTab('overview');
+            }}
+            className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted hover:text-fg hover:border-fg/30 transition-colors"
+          >
+            View →
+          </button>
+        </div>
+      ),
+    },
   ];
 
+  async function createAgent() {
+    if (!cEmail.trim()) { setCreateError('Email is required'); return; }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const a = await post<Agent>('/agents/invite', {
+        firstName: cFirst.trim() || undefined,
+        lastName: cLast.trim() || undefined,
+        email: cEmail.trim(),
+        phone: cPhone.trim() || undefined,
+        skills: cSkills ? cSkills.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        hourlyRateCents: cRate ? Math.round(parseFloat(cRate) * 100) : undefined,
+        agentType: cContractType,
+        personalMessage: cMessage.trim() || undefined,
+        businessId: !cOrgFree && cOrgId ? cOrgId : undefined,
+      });
+      // Enrich returned agent with user-mapped fields if missing
+      const name = (a as any).user?.name ?? (`${cFirst} ${cLast}`.trim() || cEmail);
+      const enriched = { ...a, fullName: name, email: ((a as any).user?.email ?? cEmail) } as Agent;
+      setRows((prev) => [enriched, ...prev]);
+      setShowCreate(false);
+      setCFirst(''); setCLast(''); setCEmail(''); setCPhone(''); setCCountry(''); setCSkills('');
+      setCRate(''); setCContractType('FREELANCER'); setCMessage('');
+      setCOrgId(''); setCOrgSearch(''); setCOrgFree(true);
+    } catch (e: any) {
+      setCreateError(e?.message ?? 'Failed to register agent');
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function review(agent: Agent, decision: 'APPROVED' | 'REJECTED') {
-    setRows((prev) => prev.map((r) => (r.id === agent.id ? { ...r, kycStatus: decision } : r)));
-    setSelected({ ...agent, kycStatus: decision });
-    try { await patch(`/admin/agents/${agent.id}/kyc`, { decision }); } catch {}
+    const newStatus: AgentStatus = decision === 'APPROVED' ? 'VERIFIED' : agent.status;
+    setRows((prev) => prev.map((r) => (r.id === agent.id ? { ...r, kycStatus: decision, status: newStatus } : r)));
+    setSelected({ ...agent, kycStatus: decision, status: newStatus });
+    try {
+      await patch(`/admin/agents/${agent.id}/kyc`, { status: decision });
+    } catch (e: any) {
+      // revert on failure
+      setRows((prev) => prev.map((r) => (r.id === agent.id ? { ...r, kycStatus: agent.kycStatus, status: agent.status } : r)));
+      setSelected(agent);
+    }
   }
   async function setStatusFor(agent: Agent, newStatus: AgentStatus) {
     setRows((prev) => prev.map((r) => (r.id === agent.id ? { ...r, status: newStatus } : r)));
     setSelected({ ...agent, status: newStatus });
-    try { await patch(`/admin/agents/${agent.id}`, { status: newStatus }); } catch {}
+    try { await patch(`/agents/${agent.id}`, { status: newStatus }); } catch {}
   }
   async function bulk(action: 'approve-kyc' | 'suspend' | 'export') {
     const ids = Array.from(selectedIds);
@@ -101,7 +210,7 @@ export default function AgentsPage() {
     } else if (action === 'suspend') {
       setRows((prev) => prev.map((a) => (selectedIds.has(a.id) ? { ...a, status: 'SUSPENDED' as const } : a)));
     }
-    try { await post('/admin/agents/bulk', { ids, action }); } catch {}
+    try { await post('/agents/bulk', { ids, action }); } catch {}
     setSelectedIds(new Set());
   }
 
@@ -117,18 +226,23 @@ export default function AgentsPage() {
       <PageHeader
         title="Agents"
         description="Remote workers. Review KYC submissions and manage availability."
-        actions={<Button variant="secondary" onClick={() => downloadCsv('agents.csv', filtered)}>Export CSV</Button>}
+        actions={
+          <div className="flex gap-2">
+            <Button onClick={() => setShowCreate(true)}>+ Register Agent</Button>
+            <Button variant="secondary" onClick={() => downloadCsv('agents.csv', filtered)}>Export CSV</Button>
+          </div>
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Input placeholder="Search name, email, id…" value={q} onChange={(e) => setQ(e.target.value)} className="w-64" />
         <Select value={status} onChange={(e) => setStatus(e.target.value as AgentStatus | '')}>
           <option value="">All statuses</option>
-          {['PENDING_KYC', 'ACTIVE', 'ONLINE', 'OFFLINE', 'SUSPENDED'].map((s) => <option key={s} value={s}>{s}</option>)}
+          {['PENDING_VERIFICATION', 'VERIFIED', 'ACTIVE', 'ONLINE', 'OFFLINE', 'SUSPENDED'].map((s) => <option key={s} value={s}>{s}</option>)}
         </Select>
         <Select value={kyc} onChange={(e) => setKyc(e.target.value as KycStatus | '')}>
           <option value="">All KYC</option>
-          {['NOT_STARTED', 'PENDING', 'APPROVED', 'REJECTED'].map((s) => <option key={s} value={s}>{s}</option>)}
+          {['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED'].map((s) => <option key={s} value={s}>{s}</option>)}
         </Select>
         <Select value={country} onChange={(e) => setCountry(e.target.value)}>
           <option value="">All countries</option>
@@ -154,11 +268,132 @@ export default function AgentsPage() {
         rows={filtered}
         getRowId={(a) => a.id}
         loading={loading}
-        onRowClick={(a) => { setSelected(a); setTab('overview'); }}
+        onRowClick={(a) => {
+          const clean = { ...a, skills: ((a.skills ?? []) as any[]).map((s) => typeof s === 'string' ? s : s?.skill).filter(Boolean) };
+          setSelected(clean as Agent);
+          setTab('overview');
+        }}
         selectable
         selectedIds={selectedIds}
         onSelectedChange={setSelectedIds}
       />
+
+      {/* Create agent drawer */}
+      <Drawer
+        open={showCreate}
+        onClose={() => { setShowCreate(false); setCreateError(null); }}
+        title="Invite Agent"
+        footer={
+          <div className="flex gap-2">
+            <Button onClick={createAgent} disabled={creating}>{creating ? 'Sending invite…' : 'Send invite'}</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 text-sm">
+          <p className="text-xs text-muted">Agent will receive an email with login credentials to complete KYC and start accepting tasks.</p>
+          {createError && <div className="rounded-md bg-danger/10 px-3 py-2 text-xs text-danger">{createError}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">First name</label>
+              <Input value={cFirst} onChange={(e) => setCFirst(e.target.value)} placeholder="Jane" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Last name</label>
+              <Input value={cLast} onChange={(e) => setCLast(e.target.value)} placeholder="Doe" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Email *</label>
+            <Input type="email" value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="agent@email.com" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Phone</label>
+              <Input value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="+254..." />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Expected hourly rate ($)</label>
+              <Input type="number" min="0" step="0.01" value={cRate} onChange={(e) => setCRate(e.target.value)} placeholder="e.g. 8" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Contract type</label>
+            <Select value={cContractType} onChange={(e) => setCContractType(e.target.value as 'EMPLOYEE' | 'FREELANCER')}>
+              <option value="FREELANCER">Freelance / Gig</option>
+              <option value="EMPLOYEE">Employee / Staff</option>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Skills (comma-separated)</label>
+            <Input value={cSkills} onChange={(e) => setCSkills(e.target.value)} placeholder="Customer Support, KYC, Data Entry" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Personal message (optional)</label>
+            <textarea
+              value={cMessage}
+              onChange={(e) => setCMessage(e.target.value)}
+              placeholder="Hi, we'd love to have you on our team..."
+              rows={3}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 resize-none"
+            />
+          </div>
+
+          {/* Org assignment */}
+          <div className="rounded-lg border border-border bg-surface-2 p-4 space-y-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted font-semibold">Organisation assignment</div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setCOrgFree(true); setCOrgId(''); setCOrgSearch(''); }}
+                className={`flex-1 rounded-lg border py-2 text-xs font-medium transition-all ${cOrgFree ? 'border-brand bg-brand/8 text-brand ring-1 ring-brand/40' : 'border-border text-muted hover:border-brand/30'}`}
+              >
+                Free agent <span className="block text-[10px] font-normal opacity-70">Visible to all orgs in marketplace</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCOrgFree(false)}
+                className={`flex-1 rounded-lg border py-2 text-xs font-medium transition-all ${!cOrgFree ? 'border-brand bg-brand/8 text-brand ring-1 ring-brand/40' : 'border-border text-muted hover:border-brand/30'}`}
+              >
+                Tied to org <span className="block text-[10px] font-normal opacity-70">Assigned to a specific organisation</span>
+              </button>
+            </div>
+            {!cOrgFree && (
+              cOrgId ? (
+                <div className="flex items-center justify-between rounded-md border border-brand/30 bg-brand/5 px-3 py-2">
+                  <div>
+                    <div className="text-xs font-medium text-fg">{businesses.find((b) => b.id === cOrgId)?.name ?? cOrgId}</div>
+                    <div className="text-[10px] text-muted">{businesses.find((b) => b.id === cOrgId)?.contactEmail ?? ''}</div>
+                  </div>
+                  <button type="button" onClick={() => { setCOrgId(''); setCOrgSearch(''); }} className="text-xs text-danger hover:underline">Change</button>
+                </div>
+              ) : (
+                <>
+                  <Input placeholder="Search organisation…" value={cOrgSearch} onChange={(e) => setCOrgSearch(e.target.value)} />
+                  {bizLoading ? (
+                    <div className="text-xs text-muted py-1">Loading organisations…</div>
+                  ) : (
+                    <div className="max-h-40 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                      {businesses
+                        .filter((b) => !cOrgSearch || b.name.toLowerCase().includes(cOrgSearch.toLowerCase()) || b.contactEmail.toLowerCase().includes(cOrgSearch.toLowerCase()))
+                        .slice(0, 20)
+                        .map((b) => (
+                          <button key={b.id} type="button" onClick={() => { setCOrgId(b.id); setCOrgSearch(''); }} className="w-full text-left px-3 py-2 hover:bg-surface transition-colors">
+                            <div className="text-xs font-medium text-fg">{b.name}</div>
+                            <div className="text-[10px] text-muted">{b.contactEmail}</div>
+                          </button>
+                        ))}
+                      {businesses.filter((b) => !cOrgSearch || b.name.toLowerCase().includes(cOrgSearch.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-xs text-muted">No organisations found</div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )
+            )}
+          </div>
+        </div>
+      </Drawer>
 
       <Drawer
         open={!!selected}
@@ -227,18 +462,21 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function AgentKyc({ agentId }: { agentId: string }) {
   const [docs, setDocs] = useState<{ id: string; type: string; status: string; url?: string }[]>([]);
-  const [kycError, setKycError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ items: typeof docs }>(`/admin/agents/${agentId}/kyc-docs`);
-        setDocs(d.items);
-      } catch (e: any) {
-        setKycError(e?.message ?? 'Failed to load KYC docs');
-      }
+        const d = await get<{ items: typeof docs } | typeof docs>(`/agents/${agentId}/kyc-docs`);
+        setDocs(Array.isArray(d) ? d : (d?.items ?? []));
+      } catch { /* graceful — no endpoint yet */ }
     })();
   }, [agentId]);
-  if (kycError) return <div className="py-6 text-center text-sm text-danger">{kycError}</div>;
+  if (docs.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">
+        No KYC documents submitted yet.
+      </div>
+    );
+  }
   return (
     <div className="space-y-2 text-sm">
       {docs.map((d) => (
@@ -246,7 +484,7 @@ function AgentKyc({ agentId }: { agentId: string }) {
           <div className="font-medium text-fg">{d.type}</div>
           <div className="flex items-center gap-2">
             <Badge tone={statusTone(d.status)}>{d.status}</Badge>
-            <Button size="sm" variant="outline" onClick={() => alert(`Preview not wired: ${d.url ?? d.id}`)}>View</Button>
+            <Button size="sm" variant="outline" onClick={() => alert(`Preview: ${d.url ?? d.id}`)}>View</Button>
           </div>
         </div>
       ))}
@@ -256,18 +494,22 @@ function AgentKyc({ agentId }: { agentId: string }) {
 
 function AgentSkills({ agent, onChange }: { agent: Agent; onChange: (skills: string[]) => void }) {
   const [input, setInput] = useState('');
+  // Skills from API can be AgentSkill objects { id, agentId, skill, ... } or plain strings — normalise here
+  const skillList: string[] = (agent.skills ?? []).map((s: any) => (typeof s === 'string' ? s : s?.skill)).filter(Boolean) as string[];
+
   async function save(skills: string[]) {
     onChange(skills);
-    try { await patch(`/admin/agents/${agent.id}`, { skills }); } catch {}
+    try { await patch(`/agents/${agent.id}`, { skills }); } catch {}
   }
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap gap-2">
-        {(agent.skills ?? []).map((s) => (
+        {skillList.length === 0 && <span className="text-xs text-muted">No skills added yet.</span>}
+        {skillList.map((s) => (
           <span key={s} className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-3 py-1 text-xs text-fg">
             {s}
             <button
-              onClick={() => save((agent.skills ?? []).filter((x) => x !== s))}
+              onClick={() => save(skillList.filter((x) => x !== s))}
               className="text-muted hover:text-danger"
               aria-label={`Remove ${s}`}
             >
@@ -279,12 +521,12 @@ function AgentSkills({ agent, onChange }: { agent: Agent; onChange: (skills: str
       <div className="flex gap-2">
         <Input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Add skill and press Enter" onKeyDown={(e) => {
           if (e.key === 'Enter' && input.trim()) {
-            save([...(agent.skills ?? []), input.trim()]);
+            save([...skillList, input.trim()]);
             setInput('');
           }
         }} />
         <Button size="sm" onClick={() => {
-          if (input.trim()) { save([...(agent.skills ?? []), input.trim()]); setInput(''); }
+          if (input.trim()) { save([...skillList, input.trim()]); setInput(''); }
         }}>Add</Button>
       </div>
     </div>
@@ -293,19 +535,21 @@ function AgentSkills({ agent, onChange }: { agent: Agent; onChange: (skills: str
 
 function AgentPerformance({ agentId }: { agentId: string }) {
   const [data, setData] = useState<{ completionRate: number; onTimeRate: number; avgResponseMins: number; last30Tasks: number } | null>(null);
-  const [perfError, setPerfError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ completionRate: number; onTimeRate: number; avgResponseMins: number; last30Tasks: number }>(`/admin/agents/${agentId}/performance`);
+        const d = await get<{ completionRate: number; onTimeRate: number; avgResponseMins: number; last30Tasks: number }>(`/agents/${agentId}/performance`);
         setData(d);
-      } catch (e: any) {
-        setPerfError(e?.message ?? 'Failed to load performance');
-      }
+      } catch { /* endpoint not yet available */ }
     })();
   }, [agentId]);
-  if (perfError) return <div className="py-6 text-center text-sm text-danger">{perfError}</div>;
-  if (!data) return <div className="py-6 text-center text-sm text-muted">Loading…</div>;
+  if (!data) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">
+        Performance data will appear here once available.
+      </div>
+    );
+  }
   return (
     <div className="grid grid-cols-2 gap-3 text-sm">
       <Metric label="Completion rate" value={`${data.completionRate}%`} />
@@ -327,19 +571,21 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function AgentEarnings({ agentId }: { agentId: string }) {
   const [data, setData] = useState<{ totalEarnings: number; pendingPayout: number; lastPayout?: string; history: { id: string; amount: number; at: string; status: string }[] } | null>(null);
-  const [earningsError, setEarningsError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ totalEarnings: number; pendingPayout: number; lastPayout?: string; history: { id: string; amount: number; at: string; status: string }[] }>(`/admin/agents/${agentId}/earnings`);
+        const d = await get<{ totalEarnings: number; pendingPayout: number; lastPayout?: string; history: { id: string; amount: number; at: string; status: string }[] }>(`/agents/${agentId}/earnings`);
         setData(d);
-      } catch (e: any) {
-        setEarningsError(e?.message ?? 'Failed to load earnings');
-      }
+      } catch { /* endpoint not yet available */ }
     })();
   }, [agentId]);
-  if (earningsError) return <div className="py-6 text-center text-sm text-danger">{earningsError}</div>;
-  if (!data) return <div className="py-6 text-center text-sm text-muted">Loading…</div>;
+  if (!data) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">
+        Earnings data will appear here once available.
+      </div>
+    );
+  }
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-3">
@@ -400,19 +646,15 @@ function AgentRatings({ agentId, rating }: { agentId: string; rating: number }) 
 
 function AgentDisputes({ agentId }: { agentId: string }) {
   const [list, setList] = useState<{ id: string; reason: string; status: string; at: string }[]>([]);
-  const [disputesError, setDisputesError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ items: typeof list }>(`/admin/agents/${agentId}/disputes`);
-        setList(d.items);
-      } catch (e: any) {
-        setDisputesError(e?.message ?? 'Failed to load disputes');
-      }
+        const d = await get<{ items: typeof list } | typeof list>(`/agents/${agentId}/disputes`);
+        setList(Array.isArray(d) ? d : (d?.items ?? []));
+      } catch { /* graceful */ }
     })();
   }, [agentId]);
-  if (disputesError) return <div className="py-6 text-center text-sm text-danger">{disputesError}</div>;
-  if (list.length === 0) return <div className="rounded-md border border-border bg-surface-2 p-4 text-center text-sm text-muted">No disputes.</div>;
+  if (list.length === 0) return <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">No disputes on record.</div>;
   return (
     <ul className="space-y-2 text-xs">
       {list.map((d) => (
@@ -431,18 +673,15 @@ function AgentDisputes({ agentId }: { agentId: string }) {
 
 function AgentTasks({ agentId }: { agentId: string }) {
   const [list, setList] = useState<{ id: string; title: string; status: string; at: string; budget?: number }[]>([]);
-  const [tasksError, setTasksError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ items: typeof list }>(`/admin/agents/${agentId}/tasks`);
-        setList(d.items);
-      } catch (e: any) {
-        setTasksError(e?.message ?? 'Failed to load tasks');
-      }
+        const d = await get<{ items: typeof list } | typeof list>(`/agents/${agentId}/tasks`);
+        setList(Array.isArray(d) ? d : (d?.items ?? []));
+      } catch { /* graceful */ }
     })();
   }, [agentId]);
-  if (tasksError) return <div className="py-6 text-center text-sm text-danger">{tasksError}</div>;
+  if (list.length === 0) return <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">No tasks assigned to this agent yet.</div>;
   return (
     <ul className="space-y-2 text-xs">
       {list.map((t) => (

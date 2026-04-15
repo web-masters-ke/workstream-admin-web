@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { get, post, errorMessage } from '@/lib/api';
+import { Drawer } from '@/components/ui/Drawer';
+import { get, post, put, errorMessage } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -119,9 +120,13 @@ export default function RolesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  // Add role form
+  // Add role drawer
   const [addOpen, setAddOpen] = useState(false);
   const [newRoleName, setNewRoleName] = useState('');
+  const [newRoleDisplay, setNewRoleDisplay] = useState('');
+  const [newRoleDesc, setNewRoleDesc] = useState('');
+  const [newRoleBase, setNewRoleBase] = useState<string>('');
+  const [newRoleCustomPerms, setNewRoleCustomPerms] = useState<Set<string>>(new Set());
   // Rename
   const [renamingRole, setRenamingRole] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState('');
@@ -163,11 +168,18 @@ export default function RolesPage() {
     const newRole: RoleCol = { name };
     const newRoles = [...roles, newRole];
     setRoles(newRoles);
-    setMatrix((prev) => ({
-      ...prev,
-      [name]: Object.fromEntries(PERMISSIONS.map((p) => [p.key, false])),
-    }));
+    // Start from base role's permissions if selected, then apply custom checkboxes
+    const basePerms = newRoleBase ? (matrix[newRoleBase] ?? {}) : {};
+    const permsFromCustom = Object.fromEntries(PERMISSIONS.map((p) => [p.key, newRoleCustomPerms.has(p.key)]));
+    const merged = newRoleBase
+      ? { ...basePerms, ...Object.fromEntries([...newRoleCustomPerms].map((k) => [k, true])) }
+      : permsFromCustom;
+    setMatrix((prev) => ({ ...prev, [name]: merged }));
     setNewRoleName('');
+    setNewRoleDisplay('');
+    setNewRoleDesc('');
+    setNewRoleBase('');
+    setNewRoleCustomPerms(new Set());
     setAddOpen(false);
   }
 
@@ -206,7 +218,7 @@ export default function RolesPage() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      await post('/admin/settings', {
+      await put('/admin/settings', {
         key: 'rbac.roles',
         value: JSON.stringify({ roles, matrix }),
       });
@@ -251,22 +263,117 @@ export default function RolesPage() {
         </div>
       )}
 
-      {/* Add role form */}
-      {addOpen && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-surface p-3">
-          <Input
-            value={newRoleName}
-            onChange={(e) => setNewRoleName(e.target.value)}
-            placeholder="Role name (e.g. CONTENT_MANAGER)"
-            className="w-64"
-            onKeyDown={(e) => { if (e.key === 'Enter') addRole(); }}
-          />
-          <Button size="sm" onClick={addRole}>Add</Button>
-          <Button size="sm" variant="ghost" onClick={() => { setAddOpen(false); setNewRoleName(''); }}>
-            Cancel
-          </Button>
+      {/* ── Add Role Drawer ── */}
+      <Drawer
+        open={addOpen}
+        onClose={() => { setAddOpen(false); setNewRoleName(''); setNewRoleDisplay(''); setNewRoleDesc(''); setNewRoleBase(''); setNewRoleCustomPerms(new Set()); }}
+        title="Add New Role"
+        width="w-[540px]"
+        footer={
+          <div className="flex gap-2">
+            <Button onClick={addRole} disabled={!newRoleName.trim()}>Create role</Button>
+            <Button variant="ghost" onClick={() => setAddOpen(false)}>Cancel</Button>
+          </div>
+        }
+      >
+        <div className="space-y-5 text-sm">
+          <p className="text-xs text-muted">
+            Roles control what users can see and do on the platform. Assign permissions below or copy from an existing role and customize.
+          </p>
+
+          {/* Role name */}
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Role name (slug) *</label>
+            <Input
+              value={newRoleName}
+              onChange={(e) => setNewRoleName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+              placeholder="e.g. CONTENT_MANAGER"
+            />
+            <p className="mt-0.5 text-[10px] text-muted">Must be uppercase with underscores. This is the internal identifier.</p>
+          </div>
+
+          {/* Display name */}
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Display name</label>
+            <Input value={newRoleDisplay} onChange={(e) => setNewRoleDisplay(e.target.value)} placeholder="e.g. Content Manager" />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Description</label>
+            <textarea
+              value={newRoleDesc}
+              onChange={(e) => setNewRoleDesc(e.target.value)}
+              placeholder="Describe what this role can do and who it is for…"
+              className="h-20 w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+            />
+          </div>
+
+          {/* Copy from existing role */}
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Copy permissions from existing role (optional)</label>
+            <div className="flex flex-wrap gap-2">
+              {['', ...roles.map((r) => r.name)].map((r) => (
+                <button
+                  key={r || 'none'}
+                  onClick={() => { setNewRoleBase(r); setNewRoleCustomPerms(new Set()); }}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    newRoleBase === r
+                      ? 'border-brand bg-brand/15 text-brand'
+                      : 'border-border text-muted hover:bg-surface-2 hover:text-fg'
+                  }`}
+                >
+                  {r || 'None (start blank)'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Permission overrides */}
+          <div>
+            <label className="mb-2 block text-[11px] uppercase tracking-wider text-muted">
+              {newRoleBase ? 'Add extra permissions (on top of copied role)' : 'Select permissions'}
+            </label>
+            <div className="max-h-72 overflow-y-auto rounded-md border border-border bg-surface-2 p-3">
+              {GROUPS.map((group) => (
+                <div key={group} className="mb-3">
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{group}</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {PERMISSIONS.filter((p) => p.group === group).map((perm) => {
+                      const fromBase = newRoleBase ? (matrix[newRoleBase]?.[perm.key] ?? false) : false;
+                      const customChecked = newRoleCustomPerms.has(perm.key);
+                      const checked = fromBase || customChecked;
+                      return (
+                        <label key={perm.key} className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs ${checked ? 'bg-brand/10 text-brand' : 'text-fg hover:bg-surface'}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={fromBase}
+                            onChange={() => {
+                              setNewRoleCustomPerms((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(perm.key)) next.delete(perm.key);
+                                else next.add(perm.key);
+                                return next;
+                              });
+                            }}
+                            className="accent-brand"
+                          />
+                          {perm.label}
+                          {fromBase && <span className="ml-auto text-[9px] text-muted">inherited</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] text-muted">
+              {newRoleCustomPerms.size + (newRoleBase ? Object.values(matrix[newRoleBase] ?? {}).filter(Boolean).length : 0)} permissions selected
+            </p>
+          </div>
         </div>
-      )}
+      </Drawer>
 
       {/* Matrix table */}
       <div className="overflow-auto rounded-lg border border-border bg-surface">

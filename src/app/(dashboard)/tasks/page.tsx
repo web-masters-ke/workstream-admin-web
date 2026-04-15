@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
 import { get, patch, post } from '@/lib/api';
-import type { Task, TaskStatus } from '@/lib/types';
+import type { Task, TaskStatus, Business } from '@/lib/types';
 import { formatDate, formatMoney } from '@/lib/format';
 import { downloadCsv } from '@/lib/export';
 
@@ -31,6 +31,37 @@ export default function TasksPage() {
   const [reassignReason, setReassignReason] = useState('');
   const [reassignPriority, setReassignPriority] = useState('');
   const [reassignSlaExt, setReassignSlaExt] = useState('');
+
+  // Create task
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [businesses, setBusinesses] = useState<{ id: string; name: string }[]>([]);
+  const [bizLoading, setBizLoading] = useState(false);
+  const [bizError, setBizError] = useState<string | null>(null);
+  // scope: 'platform' = open marketplace listing; 'business' = assigned to a specific org
+  const [cScope, setCScope] = useState<'platform' | 'business'>('platform');
+  const [cBusinessId, setCBusinessId] = useState('');
+  const [cTitle, setCTitle] = useState('');
+  const [cDescription, setCDescription] = useState('');
+  const [cPriority, setCPriority] = useState('MEDIUM');
+  const [cBudget, setCBudget] = useState('');
+  const [cDueAt, setCDueAt] = useState('');
+
+  // Reload businesses every time the create drawer opens
+  useEffect(() => {
+    if (!showCreate) return;
+    setBizLoading(true);
+    setBizError(null);
+    get<any>('/admin/businesses?limit=200')
+      .then((d) => {
+        const items = Array.isArray(d) ? d : (d?.items ?? []);
+        setBusinesses(items);
+        if (items.length === 0) setBizError('No businesses found — create one first.');
+      })
+      .catch((e: any) => setBizError(e?.message ?? 'Failed to load businesses'))
+      .finally(() => setBizLoading(false));
+  }, [showCreate]);
 
   useEffect(() => {
     (async () => {
@@ -85,16 +116,43 @@ export default function TasksPage() {
     } },
   ];
 
+  async function createTask() {
+    if (!cTitle.trim()) { setCreateError('Title is required'); return; }
+    if (!cBusinessId) { setCreateError('Select a business — every task needs an owning organisation'); return; }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        title: cTitle.trim(),
+        description: cDescription.trim() || undefined,
+        priority: cPriority,
+        budgetCents: cBudget ? Math.round(Number(cBudget) * 100) : undefined,
+        dueAt: cDueAt || undefined,
+        businessId: cBusinessId,
+        isMarketplace: cScope === 'platform',
+      };
+      const t = await post<Task>('/tasks', payload);
+      setRows((prev) => [t, ...prev]);
+      setShowCreate(false);
+      setCTitle(''); setCDescription(''); setCPriority('MEDIUM'); setCBudget(''); setCDueAt('');
+      setCBusinessId(''); setCScope('platform');
+    } catch (e: any) {
+      setCreateError(e?.message ?? 'Failed to create task');
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function changeStatus(task: Task, newStatus: TaskStatus) {
     setRows((prev) => prev.map((r) => (r.id === task.id ? { ...r, status: newStatus } : r)));
     setSelected({ ...task, status: newStatus });
-    try { await patch(`/admin/tasks/${task.id}`, { status: newStatus }); } catch {}
+    try { await patch(`/tasks/${task.id}`, { status: newStatus }); } catch {}
   }
 
   async function forceReassign() {
     if (!selected || !reassignAgentId.trim()) return;
     try {
-      await post(`/admin/tasks/${selected.id}/reassign`, {
+      await post(`/tasks/${selected.id}/assign`, {
         agentId: reassignAgentId.trim(),
         reason: reassignReason,
         priority: reassignPriority || undefined,
@@ -111,7 +169,7 @@ export default function TasksPage() {
 
   async function refundTask() {
     if (!selected) return;
-    try { await post(`/admin/tasks/${selected.id}/refund`, {}); alert('Refund issued'); } catch { alert('Backend unavailable — would issue refund.'); }
+    try { await post(`/tasks/${selected.id}/refund`, {}); alert('Refund issued'); } catch { alert('Backend unavailable — would issue refund.'); }
   }
 
   async function bulk(action: 'cancel' | 'export') {
@@ -122,7 +180,7 @@ export default function TasksPage() {
       return;
     }
     setRows((prev) => prev.map((t) => (selectedIds.has(t.id) ? { ...t, status: 'CANCELLED' as const } : t)));
-    try { await post('/admin/tasks/bulk', { ids, action }); } catch {}
+    try { await post('/tasks/bulk', { ids, action }); } catch {}
     setSelectedIds(new Set());
   }
 
@@ -138,7 +196,12 @@ export default function TasksPage() {
       <PageHeader
         title="Tasks"
         description="Cross-platform audit of all tasks and their lifecycle."
-        actions={<Button variant="secondary" onClick={() => downloadCsv('tasks.csv', filtered)}>Export CSV</Button>}
+        actions={
+          <div className="flex gap-2">
+            <Button onClick={() => setShowCreate(true)}>+ Create Task</Button>
+            <Button variant="secondary" onClick={() => downloadCsv('tasks.csv', filtered)}>Export CSV</Button>
+          </div>
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -177,6 +240,100 @@ export default function TasksPage() {
         selectedIds={selectedIds}
         onSelectedChange={setSelectedIds}
       />
+
+      {/* Create task drawer */}
+      <Drawer
+        open={showCreate}
+        onClose={() => { setShowCreate(false); setCreateError(null); }}
+        title="Create Task"
+        width="w-[560px]"
+        footer={
+          <div className="flex gap-2">
+            <Button onClick={createTask} disabled={creating}>{creating ? 'Creating…' : 'Create task'}</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 text-sm">
+          {createError && <div className="rounded-md bg-danger/10 px-3 py-2 text-xs text-danger">{createError}</div>}
+
+          {/* Scope selector */}
+          <div>
+            <label className="mb-2 block text-[11px] uppercase tracking-wider text-muted">Task scope *</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCScope('platform')}
+                className={`rounded-lg border p-3 text-left transition-all ${
+                  cScope === 'platform'
+                    ? 'border-brand bg-brand/10 text-brand'
+                    : 'border-border hover:border-brand/40 hover:bg-surface-2'
+                }`}
+              >
+                <div className="font-semibold">Platform-wide</div>
+                <p className="mt-0.5 text-[11px] text-muted">Open marketplace listing — any business can request agents</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCScope('business')}
+                className={`rounded-lg border p-3 text-left transition-all ${
+                  cScope === 'business'
+                    ? 'border-brand bg-brand/10 text-brand'
+                    : 'border-border hover:border-brand/40 hover:bg-surface-2'
+                }`}
+              >
+                <div className="font-semibold">Assigned to business</div>
+                <p className="mt-0.5 text-[11px] text-muted">Direct assignment to a specific organisation</p>
+              </button>
+            </div>
+          </div>
+
+          {/* Business picker — always required */}
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">
+              Business *{cScope === 'platform' ? <span className="ml-1 normal-case font-normal text-muted">(task owner — listed on marketplace)</span> : ''}
+            </label>
+            {bizError && <p className="mb-1 text-xs text-danger">{bizError}</p>}
+            <Select value={cBusinessId} onChange={(e) => setCBusinessId(e.target.value)} disabled={bizLoading}>
+              <option value="">{bizLoading ? 'Loading businesses…' : 'Select a business…'}</option>
+              {businesses.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </Select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Title *</label>
+            <Input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="e.g. Customer support — 20 hrs/week" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Description</label>
+            <textarea
+              value={cDescription}
+              onChange={(e) => setCDescription(e.target.value)}
+              placeholder="Detailed requirements, deliverables, expectations…"
+              rows={4}
+              className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Priority</label>
+              <Select value={cPriority} onChange={(e) => setCPriority(e.target.value)}>
+                {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Budget (KES)</label>
+              <Input type="number" min={0} value={cBudget} onChange={(e) => setCBudget(e.target.value)} placeholder="5000" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Due date</label>
+            <Input type="date" value={cDueAt} onChange={(e) => setCDueAt(e.target.value)} />
+          </div>
+        </div>
+      </Drawer>
 
       <Drawer
         open={!!selected}
@@ -272,18 +429,21 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function TaskTimeline({ taskId }: { taskId: string }) {
   const [events, setEvents] = useState<{ id: string; event: string; actor?: string; at: string }[]>([]);
-  const [timelineError, setTimelineError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
-        const d = await get<{ items: typeof events }>(`/admin/tasks/${taskId}/timeline`);
-        setEvents(d.items);
-      } catch (e: any) {
-        setTimelineError(e?.message ?? 'Failed to load timeline');
-      }
+        const raw = await get<any[]>(`/tasks/${taskId}/history`);
+        const items = Array.isArray(raw) ? raw : [];
+        setEvents(items.map((e: any) => ({
+          id: e.id,
+          event: e.event ?? e.status ?? 'Status updated',
+          actor: e.actor?.name ?? e.actor?.email,
+          at: e.createdAt ?? e.at,
+        })));
+      } catch { /* graceful */ }
     })();
   }, [taskId]);
-  if (timelineError) return <div className="py-4 text-center text-sm text-danger">{timelineError}</div>;
+  if (events.length === 0) return <div className="py-4 text-center text-sm text-muted">No timeline events yet.</div>;
   return (
     <div className="relative ml-2 border-l-2 border-border pl-4">
       {events.map((e) => (

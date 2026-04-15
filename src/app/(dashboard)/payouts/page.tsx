@@ -11,6 +11,21 @@ import type { Payment, PaymentStatus } from '@/lib/types';
 
 type FilterStatus = 'ALL' | 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
+interface Payout {
+  id: string;
+  agentId: string;
+  agentName: string;
+  agentEmail: string;
+  amount: number;
+  currency: string;
+  status: string;
+  method: string | null;
+  destination: string | null;
+  reference: string | null;
+  createdAt: string;
+  processedAt: string | null;
+}
+
 function statusTone(status: string): 'neutral' | 'warn' | 'success' | 'danger' {
   if (status === 'COMPLETED') return 'success';
   if (status === 'PENDING' || status === 'PROCESSING') return 'warn';
@@ -19,20 +34,19 @@ function statusTone(status: string): 'neutral' | 'warn' | 'success' | 'danger' {
 }
 
 export default function PayoutsPage() {
-  const [payouts, setPayouts] = useState<Payment[]>([]);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterStatus>('ALL');
+  const [filter, setFilter] = useState<FilterStatus>('PENDING');
   const [acting, setActing] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
     setError(null);
-    get<Payment[] | { items: Payment[] }>('/payments')
-      .catch(() => [] as Payment[])
+    get<Payout[] | { items: Payout[] }>('/payments/payouts')
       .then((raw) => {
-        const all = Array.isArray(raw) ? raw : ((raw as { items: Payment[] }).items ?? []);
-        setPayouts(all.filter((p) => p.type === 'PAYOUT' || !p.type));
+        const all = Array.isArray(raw) ? raw : ((raw as any).items ?? []);
+        setPayouts(all);
       })
       .catch((e: Error) => setError(e?.message ?? 'Failed to load payouts'))
       .finally(() => setLoading(false));
@@ -43,19 +57,19 @@ export default function PayoutsPage() {
   const filtered = filter === 'ALL' ? payouts : payouts.filter((p) => p.status === filter);
 
   const pending = payouts.filter((p) => p.status === 'PENDING').length;
-  const totalValue = payouts.filter((p) => p.status === 'PENDING').reduce((a, p) => a + (p.amount ?? 0), 0);
+  const totalValue = payouts.filter((p) => p.status === 'PENDING').reduce((a, p) => a + p.amount, 0);
   const processedToday = payouts.filter((p) => {
-    if (p.status !== 'COMPLETED' || !p.completedAt) return false;
-    return new Date(p.completedAt).toDateString() === new Date().toDateString();
+    if (p.status !== 'COMPLETED' || !p.processedAt) return false;
+    return new Date(p.processedAt).toDateString() === new Date().toDateString();
   }).length;
   const failed = payouts.filter((p) => p.status === 'FAILED').length;
 
   const handleApprove = async (id: string) => {
     setActing(id);
     try {
-      await patch(`/payments/payouts/${id}/approve`, { status: 'PROCESSING' });
+      await patch(`/payments/payouts/${id}/approve`, {});
       setPayouts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, status: 'PROCESSING' as PaymentStatus } : p)),
+        prev.map((p) => (p.id === id ? { ...p, status: 'COMPLETED', processedAt: new Date().toISOString() } : p)),
       );
     } catch {
       // ignore
@@ -67,9 +81,9 @@ export default function PayoutsPage() {
   const handleReject = async (id: string) => {
     setActing(id);
     try {
-      await patch(`/payments/payouts/${id}/reject`, { status: 'FAILED' });
+      await patch(`/payments/payouts/${id}/reject`, {});
       setPayouts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, status: 'FAILED' as PaymentStatus } : p)),
+        prev.map((p) => (p.id === id ? { ...p, status: 'FAILED' } : p)),
       );
     } catch {
       // ignore
@@ -139,7 +153,10 @@ export default function PayoutsPage() {
             <tbody className="divide-y divide-border">
               {filtered.map((payout) => (
                 <tr key={payout.id} className="hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 text-muted">{payout.agentId ?? '—'}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-fg">{payout.agentName}</div>
+                    <div className="text-xs text-muted">{payout.destination || payout.agentEmail}</div>
+                  </td>
                   <td className="px-4 py-3 font-medium text-fg">{formatMoney(payout.amount, 'KES')}</td>
                   <td className="px-4 py-3 text-muted">{payout.method ?? 'M-Pesa'}</td>
                   <td className="px-4 py-3">

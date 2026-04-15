@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
-import { get, patch } from '@/lib/api';
+import { get, patch, post } from '@/lib/api';
 import type { Dispute, DisputeStatus } from '@/lib/types';
 import { formatDate } from '@/lib/format';
 import { downloadCsv } from '@/lib/export';
@@ -24,6 +24,7 @@ export default function DisputesPage() {
   const [refundAmount, setRefundAmount] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState<'detail' | 'evidence' | 'messages'>('detail');
+  const [actioning, setActioning] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -77,6 +78,54 @@ export default function DisputesPage() {
       },
     },
     { key: 'created', header: 'Opened', render: (d) => <span className="text-muted">{formatDate(d.createdAt)}</span> },
+    {
+      key: 'actions',
+      header: '',
+      render: (d) => {
+        if (['RESOLVED', 'CLOSED'].includes(d.status)) {
+          return <span className="text-xs text-muted">Closed</span>;
+        }
+        const busy = actioning === d.id;
+        return (
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            {d.status !== 'UNDER_REVIEW' && (
+              <button
+                disabled={busy}
+                onClick={() => quickAction(d, 'UNDER_REVIEW')}
+                className="rounded px-2 py-1 text-[10px] font-semibold bg-brand/10 text-brand hover:bg-brand/20 disabled:opacity-50 transition-colors"
+                title="Take ownership — move to Under Review"
+              >
+                {busy ? '…' : 'Own'}
+              </button>
+            )}
+            <button
+              disabled={busy}
+              onClick={() => quickAction(d, 'RESOLVED')}
+              className="rounded px-2 py-1 text-[10px] font-semibold bg-success/15 text-success hover:bg-success/25 disabled:opacity-50 transition-colors"
+              title="Resolve dispute"
+            >
+              {busy ? '…' : 'Resolve'}
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => quickAction(d, 'ESCALATED')}
+              className="rounded px-2 py-1 text-[10px] font-semibold bg-warn/15 text-warn hover:bg-warn/25 disabled:opacity-50 transition-colors"
+              title="Escalate to senior staff"
+            >
+              {busy ? '…' : 'Escalate'}
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => quickAction(d, 'CLOSED')}
+              className="rounded px-2 py-1 text-[10px] font-semibold bg-muted/15 text-muted hover:bg-muted/25 disabled:opacity-50 transition-colors"
+              title="Close without action"
+            >
+              {busy ? '…' : 'Close'}
+            </button>
+          </div>
+        );
+      },
+    },
   ];
 
   async function resolve(d: Dispute, newStatus: DisputeStatus) {
@@ -91,6 +140,20 @@ export default function DisputesPage() {
     try {
       await patch(`/admin/disputes/${d.id}`, { status: newStatus, resolutionNote: resolution, refundAmount: refundAmount ? Number(refundAmount) : undefined });
     } catch {}
+  }
+
+  // Quick inline action — no drawer needed for common one-click actions
+  async function quickAction(d: Dispute, newStatus: DisputeStatus) {
+    if (actioning) return;
+    setActioning(d.id);
+    setRows((prev) =>
+      prev.map((r) => r.id === d.id ? { ...r, status: newStatus, resolvedAt: newStatus !== 'UNDER_REVIEW' ? new Date().toISOString() : r.resolvedAt } : r),
+    );
+    try {
+      await patch(`/admin/disputes/${d.id}`, { status: newStatus });
+    } catch {} finally {
+      setActioning(null);
+    }
   }
 
   if (loading) return <div className="py-20 text-center text-muted">Loading disputes…</div>;
@@ -228,18 +291,23 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function DisputeEvidence({ disputeId }: { disputeId: string }) {
   const [items, setItems] = useState<{ id: string; type: string; label: string; party: string }[]>([]);
-  const [evidenceError, setEvidenceError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
         const d = await get<{ items: typeof items }>(`/admin/disputes/${disputeId}/evidence`);
-        setItems(d.items);
-      } catch (e: any) {
-        setEvidenceError(e?.message ?? 'Failed to load evidence');
+        setItems(Array.isArray(d) ? d : (d?.items ?? []));
+      } catch {
+        // Evidence sub-resource not yet available — show empty state
       }
     })();
   }, [disputeId]);
-  if (evidenceError) return <div className="py-4 text-center text-sm text-danger">{evidenceError}</div>;
+  if (items.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">
+        No evidence submitted for this dispute yet.
+      </div>
+    );
+  }
   return (
     <div className="space-y-2 text-sm">
       {items.map((e) => (
@@ -257,18 +325,23 @@ function DisputeEvidence({ disputeId }: { disputeId: string }) {
 
 function DisputeMessages({ disputeId }: { disputeId: string }) {
   const [msgs, setMsgs] = useState<{ id: string; author: string; role: string; body: string; at: string }[]>([]);
-  const [msgsError, setMsgsError] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       try {
         const d = await get<{ items: typeof msgs }>(`/admin/disputes/${disputeId}/messages`);
-        setMsgs(d.items);
-      } catch (e: any) {
-        setMsgsError(e?.message ?? 'Failed to load messages');
+        setMsgs(Array.isArray(d) ? d : (d?.items ?? []));
+      } catch {
+        // Messages sub-resource not yet available — show empty state
       }
     })();
   }, [disputeId]);
-  if (msgsError) return <div className="py-4 text-center text-sm text-danger">{msgsError}</div>;
+  if (msgs.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface-2 py-10 text-center text-sm text-muted">
+        No messages on this dispute yet.
+      </div>
+    );
+  }
   return (
     <div className="space-y-3 text-sm">
       {msgs.map((m) => (

@@ -121,10 +121,14 @@ export default function KycPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.map((agent) => (
+              {filtered.map((agent) => {
+                const anyA = agent as any;
+                const displayName = agent.fullName || anyA.user?.name || [anyA.user?.firstName, anyA.user?.lastName].filter(Boolean).join(' ') || anyA.user?.email || '—';
+                const displayEmail = agent.email || anyA.user?.email || '—';
+                return (
                 <tr key={agent.id} className="hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-medium text-fg">{agent.fullName}</td>
-                  <td className="px-4 py-3 text-muted">{agent.email}</td>
+                  <td className="px-4 py-3 font-medium text-fg">{displayName}</td>
+                  <td className="px-4 py-3 text-muted">{displayEmail}</td>
                   <td className="px-4 py-3 text-muted text-xs">{formatDate(agent.updatedAt)}</td>
                   <td className="px-4 py-3">
                     <Badge tone={kycTone(agent.kycStatus)}>{agent.kycStatus.replace('_', ' ')}</Badge>
@@ -150,7 +154,8 @@ export default function KycPage() {
                     )}
                   </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         </div>
