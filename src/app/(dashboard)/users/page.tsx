@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
-import { get, patch, post } from '@/lib/api';
+import { get, patch, post, del } from '@/lib/api';
 import type { User, UserRole, UserStatus } from '@/lib/types';
 import { formatDate } from '@/lib/format';
 import { downloadCsv } from '@/lib/export';
@@ -154,6 +154,19 @@ export default function UsersPage() {
       alert(`MFA reset for ${user.email}`);
     } catch {
       alert('Backend unavailable — would normally reset MFA.');
+    }
+  }
+
+  async function deleteUser(user: User) {
+    if (!confirm(`Permanently delete ${user.email}?\n\nThis cannot be undone.`)) return;
+    if (!confirm(`Are you absolutely sure? All data for ${user.email} will be removed.`)) return;
+    try {
+      await del(`/admin/users/${user.id}`);
+      setRows((prev) => prev.filter((r) => r.id !== user.id));
+      setSelected(null);
+      alert(`${user.email} deleted.`);
+    } catch (e: any) {
+      alert(`Delete failed: ${e?.message ?? 'Unknown error'}`);
     }
   }
 
@@ -611,6 +624,9 @@ export default function UsersPage() {
               </Button>
               <Button size="sm" variant="ghost" onClick={() => startImpersonate(selected)}>
                 Impersonate
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => deleteUser(selected)}>
+                Delete
               </Button>
             </div>
           )
