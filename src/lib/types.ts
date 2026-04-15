@@ -5,7 +5,7 @@
 export type UUID = string;
 export type ISODate = string;
 
-export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'OPS' | 'FINANCE' | 'SUPPORT' | 'BUSINESS' | 'AGENT';
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'SUPERVISOR' | 'OPS' | 'FINANCE' | 'SUPPORT' | 'BUSINESS' | 'AGENT';
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'PENDING' | 'DEACTIVATED';
 
 export interface User {
