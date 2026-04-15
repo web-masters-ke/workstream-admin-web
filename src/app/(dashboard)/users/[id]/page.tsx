@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge, statusTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DataTable, Column } from '@/components/ui/DataTable';
-import { get, patch } from '@/lib/api';
+import { get, patch, del } from '@/lib/api';
 import type { User, Agent, AuditLog } from '@/lib/types';
 import { formatDate, toFixed } from '@/lib/format';
 
@@ -106,9 +106,11 @@ export default function UserDetailPage() {
 /* ─── Profile Tab ───────────────────────────────────────────────────────────── */
 
 function ProfileTab({ user, onUpdate }: { user: User; onUpdate: (u: User) => void }) {
+  const router = useRouter();
   const [suspendLoading, setSuspendLoading] = useState(false);
   const [mfaLoading, setMfaLoading] = useState(false);
   const [pwLoading, setPwLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const initials = [user.firstName?.[0], user.lastName?.[0]]
     .filter(Boolean)
@@ -152,6 +154,20 @@ function ProfileTab({ user, onUpdate }: { user: User; onUpdate: (u: User) => voi
       alert('Password reset stub — not yet wired.');
     } finally {
       setPwLoading(false);
+    }
+  }
+
+  async function deleteUser() {
+    if (!confirm(`Permanently delete ${user.email}?\n\nThis cannot be undone.`)) return;
+    if (!confirm(`Are you absolutely sure? All data for ${user.email} will be removed.`)) return;
+    setDeleteLoading(true);
+    try {
+      await del(`/admin/users/${user.id}`);
+      router.push('/users');
+    } catch (e: any) {
+      alert(`Delete failed: ${e?.message ?? 'Unknown error'}`);
+    } finally {
+      setDeleteLoading(false);
     }
   }
 
@@ -236,6 +252,17 @@ function ProfileTab({ user, onUpdate }: { user: User; onUpdate: (u: User) => voi
             onClick={sendPasswordReset}
           >
             Send password reset
+          </Button>
+          <div className="my-1 border-t border-border" />
+          <Button
+            className="w-full"
+            size="sm"
+            variant="danger"
+            loading={deleteLoading}
+            disabled={deleteLoading}
+            onClick={deleteUser}
+          >
+            Delete user permanently
           </Button>
         </CardBody>
       </Card>
